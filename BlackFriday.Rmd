@@ -1,0 +1,305 @@
+---
+title: "Black_Friday"
+author: "Farhat"
+date: "October 26, 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+```{r cars}
+summary(cars)
+```
+
+## Including Plots
+
+You can also embed plots, for example:
+
+```{r pressure, echo=FALSE}
+plot(pressure)
+```
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
+
+```{r}
+library(tidyverse)
+library(ggplot2)
+library(ggthemes)
+```
+
+
+```{r}
+blackFriday <- read.csv(here::here("data", "BlackFriday.csv"))
+blackFriday.n <- (blackFriday) %>% 
+  mutate_at(vars(User_ID, Occupation,Marital_Status), ~as.factor(.))
+head(blackFriday.n,10)
+summary(blackFriday.n)
+```
+```{r}
+ggplot(blackFriday.n, aes(x = Purchase)) +
+  geom_histogram(bins = 65, fill = "#6B1173", col = "grey")  +
+  theme_economist_white()
+  
+```
+```{r}
+#occupation based
+options(scipen = 999)
+
+ggplot(blackFriday.n, aes(x= Occupation)) +
+  geom_histogram(stat = "count", bin = 75, fill = "#F7C100") +
+  ylab("# of Purchase")
+  theme_bw()
+```
+
+```{r}
+#Unique Customers:
+customer <- blackFriday.n %>% 
+  group_by(User_ID) %>% 
+  summarize(count=n()) %>% 
+  arrange(desc())
+
+row.match
+```
+
+```{r}
+#Unique Products:
+products <- blackFriday.n %>% 
+  group_by(Product_ID) %>% 
+  summarize(count=n()) %>% 
+  arrange(desc(count))
+top_products <- head(products,10)
+```
+
+
+```{r}
+ggplot(top_products, aes(x = reorder(Product_ID, -count), 
+                         y = count)) +
+  geom_col(fill = "#F78B11", width = 0.5) +
+  theme_bw() +
+  theme(axis.text = element_text(angle = 30))
+```
+
+```{r}
+blackFriday.n$pur_class <- as.factor(ifelse(blackFriday.n$Purchase > median(blackFriday.n$Purchase),"high", "low"))
+set.seed(1)
+train <- sample(1:nrow(blackFriday.n), 20000)
+j.in <- sample(1:length(train), 10000)
+j.out <- -j.in
+```
+
+```{r}
+bf.log <- glm(as.factor(pur_class)~Age +Occupation+Stay_In_Current_City_Years+City_Category+Marital_Status, blackFriday.n[train,], family = "binomial")
+summary(bf.log)
+```
+
+```{r}
+bf.pred <- predict(bf.log, newdata = blackFriday.n[test,], type = "response")
+le <- levels(blackFriday.n$pur_class)
+bf.pred.y <- ifelse(bf.pred>0.5, le[2], le[1])
+Y <- blackFriday.n[test,]$pur_class
+
+error <- mean(Y != bf.pred.y);error
+```
+
+
+```{r}
+CV.logistic<-
+  function (data, glmfit, yname, K, seed=123) {
+    
+    n <- nrow(data)
+    set.seed(seed)
+    datay=data[,yname] #response variable
+    library(MASS)
+    #partition the data into K subsets
+    f <- ceiling(n/K)
+    s <- sample(rep(1:K, f), n)  
+    #generate indices 1:10 and sample n of them  
+    # K fold cross-validated error
+    
+    CV=NULL
+    
+    for (i in 1:K) { #i=1
+      j.out <- seq_len(n)[(s == i)] #test data
+      j.in <- seq_len(n)[(s != i)] #training data
+      
+      #model with training data
+      suppressWarnings(log.fit <- glm(glmfit$call, data=data[j.in,],family = 'binomial'))
+      #observed test set y
+      testy <- datay[j.out]
+      #predicted test set y
+      log.predy=predict(log.fit, data[j.out,],type='response')
+      
+      tname=rownames(contrasts(datay))
+      class = rep(tname[1], nrow(data[j.out,]))
+      class[log.predy > 0.5] = tname[2]
+      
+      #observed - predicted on test data
+      error= mean(testy!=class)
+      #error rates 
+      CV=c(CV,mean(error))
+    }
+    
+    #Output
+    list(call = glmfit$call, K = K, error=mean(CV),
+         log_error_rate = paste(100*mean(CV), "%"), seed = seed)  
+    
+  }
+```
+
+
+```{r}
+bf.cvlog <- CV.logistic(blackFriday.n[train,], bf.log, yname = "pur_class", K = 10, seed = 123)
+
+bf.cvlog$log_error_rate
+```
+
+
+```{r}
+library(randomForest)
+set.seed(1)
+rf.bf=randomForest(Purchase~Age +Occupation+Stay_In_Current_City_Years+City_Category+Marital_Status+Product_Category_1, data=blackFriday.n, subset= j.in,mtry = 6, ntree = 500, importance=TRUE)
+yhat.rf = predict(rf.bf, newdata=blackFriday.n[j.out,])
+rmse=sqrt(mean((yhat.rf-blackFriday.n[j.out,]$Purchase)^2))
+r2=1-mse/var(blackFriday.n[j.out,]$Purchase);r2
+names(rf.bf)
+importance(rf.bf)
+varImpPlot(rf.bf)
+#mean((rf.bf$y-rf.bf$predicted)^2)
+```
+
+```{r}
+set.seed(1)
+library(xgboost)
+data.X <- blackFriday.n[j.in,c('Age', 'Occupation','Stay_In_Current_City_Years','City_Category','Marital_Status','Product_Category_1')]
+
+data.Y <- blackFriday.n[j.in, "Purchase"]
+bf.xg <- xgboost( data=as.matrix(data.X) , label =as.matrix(data.Y ))
+```
+
+```{r}
+library(MASS)
+library(tree)
+
+tree.bf=tree(Purchase~Age +Occupation+Stay_In_Current_City_Years+City_Category+Marital_Status+as.factor(Product_Category_1),blackFriday.n,subset=train)
+summary(tree.bf)
+plot(tree.bf)
+text(tree.bf, pretty=0)
+cv.bf=cv.tree(tree.bf)
+plot(cv.bf$size, cv.bf$dev, type='b')
+prune.bf=prune.tree(tree.bf, best=5)
+plot(prune.bf)
+text(prune.bf, pretty=0)
+yhat=predict(tree.bf, newdata= blackFriday.n[train,])
+bf.test=blackFriday.n[train,"Purchase"]
+plot(yhat, bf.test)
+abline(0,1)
+mean((yhat-bf.test)^2)
+```
+
+```{r}
+tree.bf=tree(Purchase~Age +Occupation+Stay_In_Current_City_Years+City_Category+Marital_Status+as.factor(Product_Category_1),blackFriday.n,subset=train)
+summary(tree.bf)
+plot(tree.bf)
+text(tree.bf, pretty=0)
+cv.bf=cv.tree(tree.bf)
+plot(cv.bf$size, cv.bf$dev, type='b')
+```
+
+
+```{r}
+library(gam)
+gam.bf=gam(Purchase~Age +Occupation+Stay_In_Current_City_Years+City_Category+Marital_Status,data=blackFriday.n[train,])
+par(mfrow=c(1,3))
+plot(gam.bf, se=TRUE,col="blue")
+summary(gam.bf)
+```
+
+```{r}
+pred.bf=predict(gam.bf,newdata=blackFriday.n[test,])
+mse=mean((pred.bf-blackFriday.n[test,]$Purchase)^2)
+r2=1-mse/var(blackFriday.n[test,]$Purchase);r2
+```
+```{r}
+lm.bf <- lm(Purchase~Age +Occupation+Stay_In_Current_City_Years+City_Category+Marital_Status,data=blackFriday.n[train,])
+summary(lm.bf)
+```
+
+```{r}
+lm.bf1 <- lm(Purchase~Age +Occupation+Stay_In_Current_City_Years+City_Category+Marital_Status + Age*Stay_In_Current_City_Years,data=blackFriday.n[train,])
+summary(lm.bf1)
+```
+
+```{r}
+nn <- blackFriday.n[,c("Product_ID", "Purchase")]
+head(nn)
+nm <- nn %>% 
+        filter(Product_ID == top_products$Product_ID[c(1,2)])
+```
+
+```{r}
+set.seed(1)
+train.nm <- sample(1:nrow(nm), nrow(nm)*2/3)
+test.nm <- -train.nm
+lm.pr <- lm(Purchase~Product_ID , data = nm[train.nm,])
+summary(lm.pr)
+pred.nm=predict(lm.pr,newdata=nm[test.nm,])
+mse.nm=mean((pred.nm-nm[test.nm,]$Purchase)^2);mse.nm
+r2.nm=1-mse.nm/var(nm[test.nm,]$Purchase);r2.nm
+```
+
+```{r}
+install.packages("gbm")
+```
+
+```{r}
+library(gbm)
+set.seed(1)
+boost.bf <- gbm(as.factor(pur_class)~Age +Occupation+Stay_In_Current_City_Years+City_Category+Marital_Status+Product_Category_1,blackFriday.n[train,], distribution = "bernoulli", n.trees = 500, interaction.depth = 4)
+```
+
+```{r}
+newData <- blackFriday.n %>% 
+  mutate_at(vars(Occupation, Marital_Status), ~as.numeric(.))
+newData$Gender <- ifelse(newData$Gender == "F", 1,0)
+newData$Age <- case_when(
+  newData$Age == "0-17" ~ 1,
+  newData$Age == "18-25" ~2,
+  newData$Age == "26-35" ~3,
+  newData$Age == "36-45" ~4,
+  newData$Age== "45-50" ~5,
+  newData$Age == "51-55" ~6,
+  newData$Age == "55+" ~7
+)
+newData$Age <- as.numeric(newData$Age)
+names(newData)[names(newData)== "Stay_In_Current_City_Years"] <- "stay_years"
+newData$stay_years <- ifelse(newData$stay_years == "4+", 4, newData$stay_years)
+newData$stay_years <- as.numeric(newData$stay_years)
+newData$Product_Category_2 <- ifelse(is.na(newData$Product_Category_2), newData$Product_Category_1, newData$Product_Category_2)
+newData$Product_Category_3 <- ifelse(is.na(newData$Product_Category_3), newData$Product_Category_1, newData$Product_Category_3)
+str(newData)
+```
+
+
+```{r}
+library(xgboost)
+set.seed(1)
+j.in = sample(1:nrow(blackFriday.n), nrow(blackFriday.n)*0.2)
+train.new= newData[j.in, c("User_ID", "Product_ID", "Purchase")]
+#test.new = newData[j.out, c("User_ID", "Product_ID", "Purchase")]
+labels <- train.new$Purchase
+#ts_label <- test.new$Purchase
+new_tr <- model.matrix(~User_ID + Product_ID, data = train.new[,-3])
+new_ts <- model.matrix(~User_ID + Product_ID, data = test.new[,-3])
+dtrain <- xgb.DMatrix(data = new_tr, label = labels)
+params <- list(booster = "gblinear", objective = "reg:linear", eta=0.3, gamma=0, max_depth=6, min_child_weight=1, subsample=1, colsample_bytree=1)
+xgbcv <- xgb.cv(params = params, data = dtrain, nrounds = 50, nfold = 5, showsd = T, metrics = "rmse", stratified = T)
+```
+
